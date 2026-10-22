@@ -184,6 +184,14 @@ typedef struct b2RevoluteJoint
 	float axialMass;
 	b2Softness springSoftness;
 
+	// Positions are fixed throughout one substep's relaxation passes.
+	b2Vec2 relaxAnchorA;
+	b2Vec2 relaxAnchorB;
+	b2Mat22 relaxK;
+	float relaxInvDet;
+	float relaxAngle;
+	bool relaxGeometryValid;
+
 	bool enableSpring;
 	bool enableMotor;
 	bool enableLimit;

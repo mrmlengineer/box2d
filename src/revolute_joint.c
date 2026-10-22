@@ -247,6 +247,7 @@ void b2PrepareRevoluteJoint( b2JointSim* base, b2StepContext* context )
 	joint->axialMass = k > 0.0f ? 1.0f / k : 0.0f;
 
 	joint->springSoftness = b2MakeSoft( joint->hertz, joint->dampingRatio, context->h );
+	joint->relaxGeometryValid = false;
 
 	if ( context->enableWarmStarting == false )
 	{
@@ -308,15 +309,34 @@ void b2SolveRevoluteJoint( b2JointSim* base, b2StepContext* context, bool useBia
 	b2Vec2 vB = stateB->linearVelocity;
 	float wB = stateB->angularVelocity;
 
-	const b2Rot dqA = stateA->deltaRotation;
-	const b2Rot dqB = stateB->deltaRotation;
-
 	bool fixedRotation = ( iA + iB == 0.0f );
+
+	// The biased solve precedes position integration, so its geometry cannot be reused.
+	if ( useBias || joint->relaxGeometryValid == false )
+	{
+		joint->relaxAnchorA = b2RotateVector( stateA->deltaRotation, joint->anchorA );
+		joint->relaxAnchorB = b2RotateVector( stateB->deltaRotation, joint->anchorB );
+		b2Vec2 rA = joint->relaxAnchorA;
+		b2Vec2 rB = joint->relaxAnchorB;
+		b2Mat22 K;
+		K.cx.x = mA + mB + rA.y * rA.y * iA + rB.y * rB.y * iB;
+		K.cy.x = -rA.y * rA.x * iA - rB.y * rB.x * iB;
+		K.cx.y = K.cy.x;
+		K.cy.y = mA + mB + rA.x * rA.x * iA + rB.x * rB.x * iB;
+		joint->relaxK = K;
+		float det = K.cx.x * K.cy.y - K.cy.x * K.cx.y;
+		joint->relaxInvDet = det != 0.0f ? 1.0f / det : det;
+		if ( ( joint->enableSpring || joint->enableLimit ) && fixedRotation == false )
+		{
+			joint->relaxAngle = b2RelativeAngle( stateB->deltaRotation, stateA->deltaRotation );
+		}
+	}
+	joint->relaxGeometryValid = !useBias;
 
 	// Solve spring.
 	if ( joint->enableSpring && fixedRotation == false )
 	{
-		float jointAngle = b2RelativeAngle( stateB->deltaRotation, stateA->deltaRotation ) + joint->deltaAngle;
+		float jointAngle = joint->relaxAngle + joint->deltaAngle;
 		float jointAngleDelta = b2UnwindAngle( jointAngle - joint->targetAngle );
 
 		float C = jointAngleDelta;
@@ -348,7 +368,7 @@ void b2SolveRevoluteJoint( b2JointSim* base, b2StepContext* context, bool useBia
 
 	if ( joint->enableLimit && fixedRotation == false )
 	{
-		float jointAngle = b2RelativeAngle( dqB, dqA ) + joint->deltaAngle - joint->referenceAngle;
+		float jointAngle = joint->relaxAngle + joint->deltaAngle - joint->referenceAngle;
 		jointAngle = b2UnwindAngle( jointAngle );
 
 		// Lower limit
@@ -420,8 +440,8 @@ void b2SolveRevoluteJoint( b2JointSim* base, b2StepContext* context, bool useBia
 		//     [  -r1y*iA*r1x-r2y*iB*r2x, mA+r1x^2*iA+mB+r2x^2*iB]
 
 		// current anchors
-		b2Vec2 rA = b2RotateVector( stateA->deltaRotation, joint->anchorA );
-		b2Vec2 rB = b2RotateVector( stateB->deltaRotation, joint->anchorB );
+		b2Vec2 rA = joint->relaxAnchorA;
+		b2Vec2 rB = joint->relaxAnchorB;
 
 		b2Vec2 Cdot = b2Sub( b2Add( vB, b2CrossSV( wB, rB ) ), b2Add( vA, b2CrossSV( wA, rA ) ) );
 
@@ -439,12 +459,11 @@ void b2SolveRevoluteJoint( b2JointSim* base, b2StepContext* context, bool useBia
 			impulseScale = base->constraintSoftness.impulseScale;
 		}
 
-		b2Mat22 K;
-		K.cx.x = mA + mB + rA.y * rA.y * iA + rB.y * rB.y * iB;
-		K.cy.x = -rA.y * rA.x * iA - rB.y * rB.x * iB;
-		K.cx.y = K.cy.x;
-		K.cy.y = mA + mB + rA.x * rA.x * iA + rB.x * rB.x * iB;
-		b2Vec2 b = b2Solve22( K, b2Add( Cdot, bias ) );
+		b2Mat22 K = joint->relaxK;
+		b2Vec2 rhs = b2Add( Cdot, bias );
+		float det = joint->relaxInvDet;
+		// Keep b2Solve22's arithmetic order instead of multiplying by an inverse matrix.
+		b2Vec2 b = { det * ( K.cy.y * rhs.x - K.cy.x * rhs.y ), det * ( K.cx.x * rhs.y - K.cx.y * rhs.x ) };
 
 		b2Vec2 impulse;
 		impulse.x = -massScale * b.x - impulseScale * joint->linearImpulse.x;
