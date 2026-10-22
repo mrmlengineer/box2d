@@ -905,6 +905,14 @@ static void b2ExecuteMainStage( b2SolverStage* stage, b2StepContext* context, ui
 	{
 		b2ExecuteBlock( stage, context, stage->blocks );
 	}
+	else if ( context->workerCount == 1 )
+	{
+		// A lone worker visits blocks in array order without synchronization.
+		for ( int i = 0; i < blockCount; ++i )
+		{
+			b2ExecuteBlock( stage, context, stage->blocks + i );
+		}
+	}
 	else
 	{
 		b2AtomicStoreU32( &context->atomicSyncBits, syncBits );
