@@ -637,7 +637,7 @@ void b2InitRevoluteGroup( b2RevoluteGroup* group )
 	}
 }
 
-static void b2GatherRevoluteVelocities( const b2BodyState* states, const int* indices, __m128* x, __m128* y,
+static inline void b2GatherRevoluteVelocities( const b2BodyState* states, const int* indices, __m128* x, __m128* y,
 									 __m128* w, __m128* flags )
 {
 	__m128 a = indices[0] == B2_NULL_INDEX ? _mm_setzero_ps() : _mm_loadu_ps( (const float*)( states + indices[0] ) );
@@ -651,7 +651,7 @@ static void b2GatherRevoluteVelocities( const b2BodyState* states, const int* in
 	*flags = d;
 }
 
-static void b2ScatterRevoluteVelocities( b2BodyState* states, const int* indices, __m128 a, __m128 b, __m128 c, __m128 d )
+static inline void b2ScatterRevoluteVelocities( b2BodyState* states, const int* indices, __m128 a, __m128 b, __m128 c, __m128 d )
 {
 	_MM_TRANSPOSE4_PS( a, b, c, d );
 	if ( indices[0] != B2_NULL_INDEX )
