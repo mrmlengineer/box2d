@@ -620,6 +620,7 @@ struct b2RevoluteGroup
 	int indexA[4], indexB[4];
 	int eligible; // -1 until first solve, then fixed for this world step
 	int remaining; // passes left in this phase; relaxation writes packed impulses back at zero
+	b2RevoluteWide anchorAx, anchorAy, anchorBx, anchorBy, centerX, centerY;
 };
 
 int b2GetRevoluteGroupSize( void )
@@ -683,6 +684,77 @@ static __m128 b2SelectRevoluteWide( __m128 mask, __m128 a, __m128 b )
 	return _mm_or_ps( _mm_and_ps( mask, a ), _mm_andnot_ps( mask, b ) );
 }
 
+static inline void b2GatherRevolutePoses( const b2BodyState* states, const int* indices, __m128* x, __m128* y,
+                                      __m128* c, __m128* s )
+{
+	__m128 identity = _mm_setr_ps( 0.0f, 0.0f, 1.0f, 0.0f );
+	__m128 a = indices[0] == B2_NULL_INDEX ? identity : _mm_loadu_ps( &states[indices[0]].deltaPosition.x );
+	__m128 b = indices[1] == B2_NULL_INDEX ? identity : _mm_loadu_ps( &states[indices[1]].deltaPosition.x );
+	__m128 d = indices[2] == B2_NULL_INDEX ? identity : _mm_loadu_ps( &states[indices[2]].deltaPosition.x );
+	__m128 e = indices[3] == B2_NULL_INDEX ? identity : _mm_loadu_ps( &states[indices[3]].deltaPosition.x );
+	_MM_TRANSPOSE4_PS( a, b, d, e );
+	*x = a;
+	*y = b;
+	*c = d;
+	*s = e;
+}
+
+static void b2PrepareRevoluteGroup( b2RevoluteGroup* g, b2JointSim* joints, int count,
+                                    b2StepContext* context, bool useBias )
+{
+	__m128 ax, ay, ac, as, bx, by, bc, bs;
+	b2GatherRevolutePoses( context->states, g->indexA, &ax, &ay, &ac, &as );
+	b2GatherRevolutePoses( context->states, g->indexB, &bx, &by, &bc, &bs );
+	g->rAx.v = _mm_sub_ps( _mm_mul_ps( ac, g->anchorAx.v ), _mm_mul_ps( as, g->anchorAy.v ) );
+	g->rAy.v = _mm_add_ps( _mm_mul_ps( as, g->anchorAx.v ), _mm_mul_ps( ac, g->anchorAy.v ) );
+	g->rBx.v = _mm_sub_ps( _mm_mul_ps( bc, g->anchorBx.v ), _mm_mul_ps( bs, g->anchorBy.v ) );
+	g->rBy.v = _mm_add_ps( _mm_mul_ps( bs, g->anchorBx.v ), _mm_mul_ps( bc, g->anchorBy.v ) );
+	__m128 mass = _mm_add_ps( g->mA.v, g->mB.v );
+	g->k11.v = _mm_add_ps( _mm_add_ps( mass, _mm_mul_ps( _mm_mul_ps( g->rAy.v, g->rAy.v ), g->iA.v ) ),
+		_mm_mul_ps( _mm_mul_ps( g->rBy.v, g->rBy.v ), g->iB.v ) );
+	g->k12.v = _mm_sub_ps( _mm_mul_ps( _mm_mul_ps( b2NegRevoluteWide( g->rAy.v ), g->rAx.v ), g->iA.v ),
+		_mm_mul_ps( _mm_mul_ps( g->rBy.v, g->rBx.v ), g->iB.v ) );
+	g->k22.v = _mm_add_ps( _mm_add_ps( mass, _mm_mul_ps( _mm_mul_ps( g->rAx.v, g->rAx.v ), g->iA.v ) ),
+		_mm_mul_ps( _mm_mul_ps( g->rBx.v, g->rBx.v ), g->iB.v ) );
+	__m128 det = _mm_sub_ps( _mm_mul_ps( g->k11.v, g->k22.v ), _mm_mul_ps( g->k12.v, g->k12.v ) );
+	__m128 nonzero = _mm_cmpneq_ps( det, _mm_setzero_ps() );
+	__m128 divisor = b2SelectRevoluteWide( nonzero, det, _mm_set1_ps( 1.0f ) );
+	g->invDet.v = b2SelectRevoluteWide( nonzero, _mm_div_ps( _mm_set1_ps( 1.0f ), divisor ), det );
+	if ( useBias )
+	{
+		g->biasX.v = _mm_mul_ps( g->biasRate.v,
+			_mm_add_ps( _mm_add_ps( _mm_sub_ps( bx, ax ), _mm_sub_ps( g->rBx.v, g->rAx.v ) ), g->centerX.v ) );
+		g->biasY.v = _mm_mul_ps( g->biasRate.v,
+			_mm_add_ps( _mm_add_ps( _mm_sub_ps( by, ay ), _mm_sub_ps( g->rBy.v, g->rAy.v ) ), g->centerY.v ) );
+	}
+	for ( int lane = 0; lane < count; ++lane )
+	{
+		b2RevoluteJoint* j = &joints[lane].revoluteJoint;
+		const b2BodyState* a = j->indexA == B2_NULL_INDEX ? &b2_identityBodyState : context->states + j->indexA;
+		const b2BodyState* b = j->indexB == B2_NULL_INDEX ? &b2_identityBodyState : context->states + j->indexB;
+		float angle = b2RelativeAngle( b->deltaRotation, a->deltaRotation ) + j->deltaAngle;
+		angle = b2UnwindAngle( angle - j->referenceAngle );
+		g->lowerBias.lane[lane] = angle - j->lowerAngle;
+		g->upperBias.lane[lane] = j->upperAngle - angle;
+		if ( useBias )
+		{
+			g->motor.lane[lane] = j->motorImpulse;
+			g->lower.lane[lane] = j->lowerImpulse;
+			g->upper.lane[lane] = j->upperImpulse;
+			g->linearX.lane[lane] = j->linearImpulse.x;
+			g->linearY.lane[lane] = j->linearImpulse.y;
+		}
+	}
+	if ( !useBias )
+	{
+		__m128 zero = _mm_setzero_ps();
+		__m128 inv_h = _mm_set1_ps( context->inv_h );
+		g->lowerBias.v = _mm_and_ps( _mm_cmpgt_ps( g->lowerBias.v, zero ), _mm_mul_ps( g->lowerBias.v, inv_h ) );
+		g->upperBias.v = _mm_and_ps( _mm_cmpgt_ps( g->upperBias.v, zero ), _mm_mul_ps( g->upperBias.v, inv_h ) );
+	}
+	g->remaining = useBias ? 1 : context->world->relaxIterations;
+}
+
 void b2SolveRevoluteGroup( b2RevoluteGroup* g, b2JointSim* joints, int count, b2StepContext* context, bool useBias )
 {
 	// First biased solve follows joint preparation, which supplies the current body indices and masses.
@@ -701,6 +773,22 @@ void b2SolveRevoluteGroup( b2RevoluteGroup* g, b2JointSim* joints, int count, b2
 			}
 			g->indexA[lane] = j->indexA;
 			g->indexB[lane] = j->indexB;
+			g->mA.lane[lane] = base->invMassA;
+			g->mB.lane[lane] = base->invMassB;
+			g->iA.lane[lane] = base->invIA;
+			g->iB.lane[lane] = base->invIB;
+			g->axialMass.lane[lane] = j->axialMass;
+			g->maxImpulse.lane[lane] = j->maxMotorImpulse;
+			g->speed.lane[lane] = j->motorSpeed;
+			g->biasRate.lane[lane] = base->constraintSoftness.biasRate;
+			g->pointMass.lane[lane] = -base->constraintSoftness.massScale;
+			g->pointScale.lane[lane] = base->constraintSoftness.impulseScale;
+			g->anchorAx.lane[lane] = j->anchorA.x;
+			g->anchorAy.lane[lane] = j->anchorA.y;
+			g->anchorBx.lane[lane] = j->anchorB.x;
+			g->anchorBy.lane[lane] = j->anchorB.y;
+			g->centerX.lane[lane] = j->deltaCenter.x;
+			g->centerY.lane[lane] = j->deltaCenter.y;
 		}
 	}
 	if ( !g->eligible )
@@ -714,50 +802,7 @@ void b2SolveRevoluteGroup( b2RevoluteGroup* g, b2JointSim* joints, int count, b2
 	}
 	if ( useBias || g->remaining == 0 )
 	{
-		for ( int lane = 0; lane < count; ++lane )
-		{
-			b2JointSim* base = joints + lane;
-			b2RevoluteJoint* j = &base->revoluteJoint;
-			const b2BodyState* a = j->indexA == B2_NULL_INDEX ? &b2_identityBodyState : context->states + j->indexA;
-			const b2BodyState* b = j->indexB == B2_NULL_INDEX ? &b2_identityBodyState : context->states + j->indexB;
-			b2PrepareRevoluteGeometry( base, context, useBias, a, b );
-			g->mA.lane[lane] = base->invMassA;
-			g->mB.lane[lane] = base->invMassB;
-			g->iA.lane[lane] = base->invIA;
-			g->iB.lane[lane] = base->invIB;
-			g->axialMass.lane[lane] = j->axialMass;
-			g->maxImpulse.lane[lane] = j->maxMotorImpulse;
-			g->speed.lane[lane] = j->motorSpeed;
-			g->rAx.lane[lane] = j->relaxAnchorA.x;
-			g->rAy.lane[lane] = j->relaxAnchorA.y;
-			g->rBx.lane[lane] = j->relaxAnchorB.x;
-			g->rBy.lane[lane] = j->relaxAnchorB.y;
-			g->k11.lane[lane] = j->relaxK.cx.x;
-			g->k12.lane[lane] = j->relaxK.cy.x;
-			g->k22.lane[lane] = j->relaxK.cy.y;
-			g->invDet.lane[lane] = j->relaxInvDet;
-			g->lowerBias.lane[lane] = j->relaxLowerBias;
-			g->upperBias.lane[lane] = j->relaxUpperBias;
-			if ( useBias )
-			{
-				g->lowerBias.lane[lane] = j->relaxLimitAngle - j->lowerAngle;
-				g->upperBias.lane[lane] = j->upperAngle - j->relaxLimitAngle;
-				g->biasRate.lane[lane] = base->constraintSoftness.biasRate;
-				b2Vec2 separation = b2Add( b2Add( b2Sub( b->deltaPosition, a->deltaPosition ),
-					b2Sub( j->relaxAnchorB, j->relaxAnchorA ) ), j->deltaCenter );
-				g->biasX.lane[lane] = base->constraintSoftness.biasRate * separation.x;
-				g->biasY.lane[lane] = base->constraintSoftness.biasRate * separation.y;
-				g->pointMass.lane[lane] = -base->constraintSoftness.massScale;
-				g->pointScale.lane[lane] = base->constraintSoftness.impulseScale;
-				// Keep these packed through the following relaxation, which refreshes only geometry.
-				g->motor.lane[lane] = j->motorImpulse;
-				g->lower.lane[lane] = j->lowerImpulse;
-				g->upper.lane[lane] = j->upperImpulse;
-				g->linearX.lane[lane] = j->linearImpulse.x;
-				g->linearY.lane[lane] = j->linearImpulse.y;
-			}
-		}
-		g->remaining = useBias ? 1 : context->world->relaxIterations;
+		b2PrepareRevoluteGroup( g, joints, count, context, useBias );
 	}
 
 	__m128 ax, ay, aw, af, bx, by, bw, bf;
