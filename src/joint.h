@@ -353,3 +353,10 @@ void b2DrawWheelJoint( b2DebugDraw* draw, b2JointSim* base, b2Transform transfor
 // Define inline functions for arrays
 B2_ARRAY_INLINE( b2Joint, b2Joint )
 B2_ARRAY_INLINE( b2JointSim, b2JointSim )
+
+#if defined( B2_SIMD_SSE2 )
+typedef struct b2RevoluteGroup b2RevoluteGroup;
+int b2GetRevoluteGroupSize( void );
+void b2InitRevoluteGroup( b2RevoluteGroup* group );
+void b2SolveRevoluteGroup( b2RevoluteGroup* group, b2JointSim* joints, int count, b2StepContext* context, bool useBias );
+#endif

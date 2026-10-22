@@ -52,6 +52,9 @@ typedef enum b2SolverBlockType
 // increases monotonically.
 typedef struct b2SolverBlock
 {
+#if defined( B2_SIMD_SSE2 )
+	struct b2RevoluteGroup* revoluteGroup;
+#endif
 	int startIndex;
 	int16_t count;
 	int16_t blockType; // b2SolverBlockType

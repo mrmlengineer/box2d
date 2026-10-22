@@ -161,15 +161,23 @@ static void b2WarmStartJointsTask( int startIndex, int endIndex, b2StepContext* 
 	b2TracyCZoneEnd( warm_joints );
 }
 
-static void b2SolveJointsTask( int startIndex, int endIndex, b2StepContext* context, int colorIndex, bool useBias )
+static void b2SolveJointsTask( int startIndex, int endIndex, b2StepContext* context, int colorIndex, bool useBias, b2SolverBlock* block )
 {
 	b2TracyCZoneNC( solve_joints, "SolveJoints", b2_colorLemonChiffon, true );
+	B2_UNUSED( block );
 
 	b2GraphColor* color = context->graph->colors + colorIndex;
 	b2JointSim* joints = color->jointSims.data;
 	B2_ASSERT( 0 <= startIndex && startIndex < color->jointSims.count );
 	B2_ASSERT( startIndex <= endIndex && endIndex <= color->jointSims.count );
 
+#if defined( B2_SIMD_SSE2 )
+	if ( block->revoluteGroup != NULL )
+	{
+		b2SolveRevoluteGroup( block->revoluteGroup, joints + startIndex, endIndex - startIndex, context, useBias );
+	}
+	else
+#endif
 	for ( int i = startIndex; i < endIndex; ++i )
 	{
 		b2JointSim* joint = joints + i;
@@ -788,7 +796,7 @@ static void b2ExecuteBlock( b2SolverStage* stage, b2StepContext* context, b2Solv
 			}
 			else if ( blockType == b2_graphJointBlock )
 			{
-				b2SolveJointsTask( startIndex, endIndex, context, stage->colorIndex, true );
+				b2SolveJointsTask( startIndex, endIndex, context, stage->colorIndex, true, block );
 			}
 			break;
 
@@ -803,7 +811,7 @@ static void b2ExecuteBlock( b2SolverStage* stage, b2StepContext* context, b2Solv
 			}
 			else if ( blockType == b2_graphJointBlock )
 			{
-				b2SolveJointsTask( startIndex, endIndex, context, stage->colorIndex, false );
+				b2SolveJointsTask( startIndex, endIndex, context, stage->colorIndex, false, block );
 			}
 			break;
 
@@ -1479,11 +1487,23 @@ void b2Solve( b2World* world, b2StepContext* stepContext )
 		b2SolverBlock* graphBlocks =
 			b2AllocateArenaItem( &world->arena, graphBlockCount * sizeof( b2SolverBlock ), "graph blocks" );
 
+#if defined( B2_SIMD_SSE2 )
+		int revoluteGroupCount = 0;
+		for ( int i = 0; i < activeColorCount; ++i )
+		{
+			revoluteGroupCount += colorJointBlockCounts[i];
+		}
+		int revoluteGroupSize = b2GetRevoluteGroupSize();
+		char* revoluteGroups = b2AllocateArenaItem( &world->arena, revoluteGroupCount * revoluteGroupSize, "revolute groups" );
+		int revoluteGroupIndex = 0;
+#endif
+
 		// Split an awake island. This modifies:
 		// - stack allocator
 		// - world island array and solver set
 		// - island indices on bodies, contacts, and joints
 		// I'm squeezing this task in here because it may be expensive and this is a safe place to put it.
+		// All solver arena allocations must precede this task; splitting uses the same allocator.
 		// Note: cannot split islands in parallel with FinalizeBodies
 		void* splitIslandTask = NULL;
 		if ( world->splitIslandId != B2_NULL_INDEX )
@@ -1558,6 +1578,18 @@ void b2Solve( b2World* world, b2StepContext* stepContext )
 			{
 				baseGraphBlock[colorJointBlockCount - 1].count =
 					(int16_t)( colorJointCounts[i] - ( colorJointBlockCount - 1 ) * colorJointBlockSize );
+#if defined( B2_SIMD_SSE2 )
+				for ( int j = 0; j < colorJointBlockCount; ++j )
+				{
+					b2SolverBlock* block = baseGraphBlock + j;
+					block->revoluteGroup = NULL;
+					if ( block->count > 1 && block->count <= 4 )
+					{
+						block->revoluteGroup = (b2RevoluteGroup*)( revoluteGroups + revoluteGroupIndex++ * revoluteGroupSize );
+						b2InitRevoluteGroup( block->revoluteGroup );
+					}
+				}
+#endif
 				baseGraphBlock += colorJointBlockCount;
 			}
 
@@ -1750,6 +1782,9 @@ void b2Solve( b2World* world, b2StepContext* stepContext )
 			world->finishTaskFcn( finalizeBodiesTask, world->userTaskContext );
 		}
 
+#if defined( B2_SIMD_SSE2 )
+		b2FreeArenaItem( &world->arena, revoluteGroups );
+#endif
 		b2FreeArenaItem( &world->arena, graphBlocks );
 		b2FreeArenaItem( &world->arena, jointBlocks );
 		b2FreeArenaItem( &world->arena, contactBlocks );
