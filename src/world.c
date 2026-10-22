@@ -194,6 +194,7 @@ b2WorldId b2CreateWorld( const b2WorldDef* def )
 	world->maxContactPushSpeed = def->maxContactPushSpeed;
 	world->contactHertz = def->contactHertz;
 	world->contactDampingRatio = def->contactDampingRatio;
+	world->relaxIterations = def->relaxIterations >= 1 ? def->relaxIterations : 1;
 
 	if ( def->frictionCallback == NULL )
 	{
@@ -2180,6 +2181,9 @@ typedef struct WorldRayCastContext
 	b2QueryFilter filter;
 	float fraction;
 	void* userContext;
+	b2TreeRayCastTraceFcn* trace;
+	void* traceContext;
+	b2WorldRayCastTraceData traceData;
 } WorldRayCastContext;
 
 static float RayCastCallback( const b2RayCastInput* input, int proxyId, uint64_t userData, void* context )
@@ -2193,7 +2197,20 @@ static float RayCastCallback( const b2RayCastInput* input, int proxyId, uint64_t
 
 	b2Shape* shape = b2ShapeArray_Get( &world->shapes, shapeId );
 
-	if ( b2ShouldQueryCollide( shape->filter, worldContext->filter ) == false )
+	bool admitted = b2ShouldQueryCollide( shape->filter, worldContext->filter );
+	if ( worldContext->trace != NULL )
+	{
+		worldContext->traceData = (b2WorldRayCastTraceData){ 0 };
+		worldContext->traceData.recorded = true;
+		worldContext->traceData.shapeIndex = shapeId;
+		worldContext->traceData.shapeCategoryBits = shape->filter.categoryBits;
+		worldContext->traceData.shapeMaskBits = shape->filter.maskBits;
+		worldContext->traceData.queryCategoryBits = worldContext->filter.categoryBits;
+		worldContext->traceData.queryMaskBits = worldContext->filter.maskBits;
+		worldContext->traceData.admitted = admitted;
+	}
+
+	if ( admitted == false )
 	{
 		return input->maxFraction;
 	}
@@ -2201,6 +2218,16 @@ static float RayCastCallback( const b2RayCastInput* input, int proxyId, uint64_t
 	b2Body* body = b2BodyArray_Get( &world->bodies, shape->bodyId );
 	b2Transform transform = b2GetBodyTransformQuick( world, body );
 	b2CastOutput output = b2RayCastShape( input, shape, transform );
+	if ( worldContext->trace != NULL )
+	{
+		worldContext->traceData.transform = transform;
+		worldContext->traceData.chainSegment = shape->type == b2_chainSegmentShape;
+		if ( shape->type == b2_chainSegmentShape )
+		{
+			worldContext->traceData.segment = shape->chainSegment.segment;
+		}
+		worldContext->traceData.output = output;
+	}
 
 	if ( output.hit )
 	{
@@ -2276,6 +2303,42 @@ static float b2RayCastClosestFcn( b2ShapeId shapeId, b2Vec2 point, b2Vec2 normal
 
 b2RayResult b2World_CastRayClosest( b2WorldId worldId, b2Vec2 origin, b2Vec2 translation, b2QueryFilter filter )
 {
+	return b2World_CastRayClosestWithTrace( worldId, origin, translation, filter, NULL, NULL );
+}
+
+static void WorldRayCastTrace( const b2TreeRayCastTraceEvent* event, void* context )
+{
+	WorldRayCastContext* worldContext = context;
+	b2TreeRayCastTraceEvent copy = *event;
+	if ( event->outcome == 3 )
+	{
+		copy.world = worldContext->traceData;
+	}
+	if ( event->outcome == 6 && event->leaf )
+	{
+		b2World* world = worldContext->world;
+		b2Shape* shape = b2ShapeArray_Get( &world->shapes, (int)event->userData );
+		b2Body* body = b2BodyArray_Get( &world->bodies, shape->bodyId );
+		copy.world.recorded = true;
+		copy.world.shapeIndex = (int)event->userData;
+		copy.world.shapeCategoryBits = shape->filter.categoryBits;
+		copy.world.shapeMaskBits = shape->filter.maskBits;
+		copy.world.queryCategoryBits = worldContext->filter.categoryBits;
+		copy.world.queryMaskBits = worldContext->filter.maskBits;
+		copy.world.admitted = b2ShouldQueryCollide( shape->filter, worldContext->filter );
+		copy.world.transform = b2GetBodyTransformQuick( world, body );
+		copy.world.chainSegment = shape->type == b2_chainSegmentShape;
+		if ( copy.world.chainSegment )
+		{
+			copy.world.segment = shape->chainSegment.segment;
+		}
+	}
+	worldContext->trace( &copy, worldContext->traceContext );
+}
+
+b2RayResult b2World_CastRayClosestWithTrace( b2WorldId worldId, b2Vec2 origin, b2Vec2 translation,
+	b2QueryFilter filter, b2TreeRayCastTraceFcn* trace, void* traceContext )
+{
 	b2RayResult result = { 0 };
 
 	b2World* world = b2GetWorldFromId( worldId );
@@ -2289,12 +2352,13 @@ b2RayResult b2World_CastRayClosest( b2WorldId worldId, b2Vec2 origin, b2Vec2 tra
 	B2_ASSERT( b2IsValidVec2( translation ) );
 
 	b2RayCastInput input = { origin, translation, 1.0f };
-	WorldRayCastContext worldContext = { world, b2RayCastClosestFcn, filter, 1.0f, &result };
+	WorldRayCastContext worldContext = { world, b2RayCastClosestFcn, filter, 1.0f, &result, trace, traceContext };
 
 	for ( int i = 0; i < b2_bodyTypeCount; ++i )
 	{
 		b2TreeStats treeResult =
-			b2DynamicTree_RayCast( world->broadPhase.trees + i, &input, filter.maskBits, RayCastCallback, &worldContext );
+			b2DynamicTree_RayCastWithTrace( world->broadPhase.trees + i, &input, filter.maskBits, RayCastCallback,
+				&worldContext, trace != NULL ? WorldRayCastTrace : NULL, &worldContext );
 		result.nodeVisits += treeResult.nodeVisits;
 		result.leafVisits += treeResult.leafVisits;
 

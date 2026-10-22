@@ -1172,11 +1172,46 @@ b2TreeStats b2DynamicTree_Query( const b2DynamicTree* tree, b2AABB aabb, uint64_
 b2TreeStats b2DynamicTree_RayCast( const b2DynamicTree* tree, const b2RayCastInput* input, uint64_t maskBits,
 								   b2TreeRayCastCallbackFcn* callback, void* context )
 {
+	return b2DynamicTree_RayCastWithTrace( tree, input, maskBits, callback, context, NULL, NULL );
+}
+
+b2TreeStats b2DynamicTree_RayCastWithTrace( const b2DynamicTree* tree, const b2RayCastInput* input,
+	uint64_t maskBits, b2TreeRayCastCallbackFcn* callback, void* context,
+	b2TreeRayCastTraceFcn* trace, void* traceContext )
+{
 	b2TreeStats result = { 0 };
 
 	if ( tree->nodeCount == 0 )
 	{
 		return result;
+	}
+
+	if ( trace != NULL )
+	{
+		// Inventory allocated nodes, including descendants that the ray never visits.
+		for ( int i = 0; i < tree->nodeCapacity; ++i )
+		{
+			const b2TreeNode* node = tree->nodes + i;
+			if ( b2IsAllocated( node ) == false )
+			{
+				continue;
+			}
+			b2TreeRayCastTraceEvent event = { 0 };
+			event.tree = tree;
+			event.nodeId = i;
+			event.rootId = tree->root;
+			event.parentId = node->parent;
+			event.nodeCount = tree->nodeCount;
+			event.aabb = node->aabb;
+			event.categoryBits = node->categoryBits;
+			event.maskBits = maskBits;
+			event.leaf = b2IsLeaf( node );
+			event.firstChild = event.leaf ? B2_NULL_INDEX : node->children.child1;
+			event.secondChild = event.leaf ? B2_NULL_INDEX : node->children.child2;
+			event.userData = event.leaf ? node->userData : 0;
+			event.outcome = 6;
+			trace( &event, traceContext );
+		}
 	}
 
 	b2Vec2 p1 = input->origin;
@@ -1220,9 +1255,27 @@ b2TreeStats b2DynamicTree_RayCast( const b2DynamicTree* tree, const b2RayCastInp
 		result.nodeVisits += 1;
 
 		b2AABB nodeAABB = node->aabb;
+		b2TreeRayCastTraceEvent event = { 0 };
+		if ( trace != NULL )
+		{
+			event.tree = tree;
+			event.nodeId = nodeId;
+			event.rootId = tree->root;
+			event.aabb = nodeAABB;
+			event.categoryBits = node->categoryBits;
+			event.maskBits = maskBits;
+			event.maxFraction = maxFraction;
+			event.firstChild = B2_NULL_INDEX;
+			event.secondChild = B2_NULL_INDEX;
+		}
 
 		if ( ( node->categoryBits & maskBits ) == 0 || b2AABB_Overlaps( nodeAABB, segmentAABB ) == false )
 		{
+			if ( trace != NULL )
+			{
+				event.outcome = ( node->categoryBits & maskBits ) == 0 ? 0 : 1;
+				trace( &event, traceContext );
+			}
 			continue;
 		}
 
@@ -1235,6 +1288,11 @@ b2TreeStats b2DynamicTree_RayCast( const b2DynamicTree* tree, const b2RayCastInp
 		float term2 = b2Dot( abs_v, h );
 		if ( term2 < term1 )
 		{
+			if ( trace != NULL )
+			{
+				event.outcome = 2;
+				trace( &event, traceContext );
+			}
 			continue;
 		}
 
@@ -1244,6 +1302,12 @@ b2TreeStats b2DynamicTree_RayCast( const b2DynamicTree* tree, const b2RayCastInp
 
 			float value = callback( &subInput, nodeId, node->userData, context );
 			result.leafVisits += 1;
+			if ( trace != NULL )
+			{
+				event.outcome = 3;
+				event.callbackValue = value;
+				trace( &event, traceContext );
+			}
 
 			// The user may return -1 to indicate this shape should be skipped
 
@@ -1278,9 +1342,21 @@ b2TreeStats b2DynamicTree_RayCast( const b2DynamicTree* tree, const b2RayCastInp
 					stack[stackCount++] = node->children.child1;
 					stack[stackCount++] = node->children.child2;
 				}
+				if ( trace != NULL )
+				{
+					event.outcome = 4;
+					event.firstChild = stack[stackCount - 1];
+					event.secondChild = stack[stackCount - 2];
+					trace( &event, traceContext );
+				}
 			}
 			else
 			{
+				if ( trace != NULL )
+				{
+					event.outcome = 5;
+					trace( &event, traceContext );
+				}
 				B2_ASSERT( stackCount < B2_TREE_STACK_SIZE - 1 );
 			}
 		}

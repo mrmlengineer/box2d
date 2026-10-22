@@ -720,6 +720,52 @@ typedef float b2TreeRayCastCallbackFcn( const b2RayCastInput* input, int proxyId
 B2_API b2TreeStats b2DynamicTree_RayCast( const b2DynamicTree* tree, const b2RayCastInput* input, uint64_t maskBits,
 										  b2TreeRayCastCallbackFcn* callback, void* context );
 
+/// World callback data, populated only by traced closest world queries.
+typedef struct b2WorldRayCastTraceData
+{
+	bool recorded;
+	int shapeIndex;
+	uint64_t shapeCategoryBits;
+	uint64_t shapeMaskBits;
+	uint64_t queryCategoryBits;
+	uint64_t queryMaskBits;
+	bool admitted;
+	bool chainSegment;
+	b2Transform transform;
+	b2Segment segment;
+	b2CastOutput output;
+} b2WorldRayCastTraceData;
+
+/// Opt-in diagnostic event: allocated-node inventory, then popped raycast nodes.
+/// The tree pointer is an identity valid only during the query. No ownership transfers.
+typedef struct b2TreeRayCastTraceEvent
+{
+	const b2DynamicTree* tree;
+	int nodeId;
+	int rootId;
+	b2AABB aabb;
+	uint64_t categoryBits;
+	uint64_t maskBits;
+	float maxFraction;
+	float callbackValue;
+	int firstChild;
+	int secondChild;
+	int parentId;
+	int nodeCount;
+	bool leaf;
+	uint64_t userData;
+	// 0: mask, 1: AABB, 2: separating axis, 3: callback, 4: children, 5: stack full, 6: inventory
+	int outcome;
+	b2WorldRayCastTraceData world;
+} b2TreeRayCastTraceEvent;
+
+typedef void b2TreeRayCastTraceFcn( const b2TreeRayCastTraceEvent* event, void* context );
+
+B2_API b2TreeStats b2DynamicTree_RayCastWithTrace( const b2DynamicTree* tree, const b2RayCastInput* input,
+	uint64_t maskBits, b2TreeRayCastCallbackFcn* callback, void* context,
+	b2TreeRayCastTraceFcn* trace, void* traceContext );
+
+
 /// This function receives clipped ray cast input for a proxy. The function
 /// returns the new ray fraction.
 /// - return a value of 0 to terminate the ray cast

@@ -75,6 +75,11 @@ B2_API b2TreeStats b2World_CastRay( b2WorldId worldId, b2Vec2 origin, b2Vec2 tra
 /// This is less general than b2World_CastRay() and does not allow for custom filtering.
 B2_API b2RayResult b2World_CastRayClosest( b2WorldId worldId, b2Vec2 origin, b2Vec2 translation, b2QueryFilter filter );
 
+/// Closest raycast with opt-in dynamic-tree diagnostics.
+B2_API b2RayResult b2World_CastRayClosestWithTrace( b2WorldId worldId, b2Vec2 origin, b2Vec2 translation,
+	b2QueryFilter filter, b2TreeRayCastTraceFcn* trace, void* traceContext );
+
+
 /// Cast a shape through the world. Similar to a cast ray except that a shape is cast instead of a point.
 ///	@see b2World_CastRay
 B2_API b2TreeStats b2World_CastShape( b2WorldId worldId, const b2ShapeProxy* proxy, b2Vec2 translation, b2QueryFilter filter,

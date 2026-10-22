@@ -24,7 +24,7 @@
 
 // todo testing
 #define ITERATIONS 1
-#define RELAX_ITERATIONS 1
+// Relax iterations are configurable per world; see b2WorldDef::relaxIterations.
 
 // Compare to SDL_CPUPauseInstruction
 #if ( defined( __GNUC__ ) || defined( __clang__ ) ) && ( defined( __i386__ ) || defined( __x86_64__ ) )
@@ -989,6 +989,7 @@ static void b2SolverTask( int startIndex, int endIndex, uint32_t threadIndexIgno
 		profile->prepareConstraints += b2GetMillisecondsAndReset( &ticks );
 
 		int subStepCount = context->subStepCount;
+		int relaxIterations = context->world->relaxIterations;
 		for ( int i = 0; i < subStepCount; ++i )
 		{
 			// stage index restarted each iteration
@@ -1050,7 +1051,7 @@ static void b2SolverTask( int startIndex, int endIndex, uint32_t threadIndexIgno
 
 			// relax constraints
 			useBias = false;
-			for ( int j = 0; j < RELAX_ITERATIONS; ++j )
+			for ( int j = 0; j < relaxIterations; ++j )
 			{
 				b2SolveOverflowJoints( context, useBias );
 				b2SolveOverflowContacts( context, useBias );
@@ -1070,7 +1071,7 @@ static void b2SolverTask( int startIndex, int endIndex, uint32_t threadIndexIgno
 
 		// advance the stage according to the sub-stepping tasks just completed
 		// integrate velocities / warm start / solve / integrate positions / relax
-		stageIndex += 1 + activeColorCount + ITERATIONS * activeColorCount + 1 + RELAX_ITERATIONS * activeColorCount;
+		stageIndex += 1 + activeColorCount + ITERATIONS * activeColorCount + 1 + relaxIterations * activeColorCount;
 
 		// Restitution
 		{
@@ -1454,7 +1455,7 @@ void b2Solve( b2World* world, b2StepContext* stepContext )
 		// b2_stageIntegratePositions
 		stageCount += 1;
 		// b2_stageRelax
-		stageCount += RELAX_ITERATIONS * activeColorCount;
+		stageCount += world->relaxIterations * activeColorCount;
 		// b2_stageRestitution
 		stageCount += activeColorCount;
 		// b2_stageStoreImpulses
@@ -1633,7 +1634,7 @@ void b2Solve( b2World* world, b2StepContext* stepContext )
 		stage += 1;
 
 		// Relax constraints
-		for ( int j = 0; j < RELAX_ITERATIONS; ++j )
+		for ( int j = 0; j < world->relaxIterations; ++j )
 		{
 			for ( int i = 0; i < activeColorCount; ++i )
 			{

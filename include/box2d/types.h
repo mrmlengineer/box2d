@@ -97,6 +97,10 @@ typedef struct b2WorldDef
 	/// the trade-off that overlap resolution becomes more energetic.
 	float contactDampingRatio;
 
+	/// Number of solver relax iterations per substep. Extra iterations remove energy
+	/// injected by speculative contacts at additional solver cost. Must be at least 1.
+	int relaxIterations;
+
 	/// This parameter controls how fast overlap is resolved and usually has units of meters per second. This only
 	/// puts a cap on the resolution speed. The resolution speed is increased by increasing the hertz and/or
 	/// decreasing the damping ratio.

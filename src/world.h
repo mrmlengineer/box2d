@@ -136,6 +136,7 @@ typedef struct b2World
 	float contactSpeed;
 	float contactHertz;
 	float contactDampingRatio;
+	int relaxIterations;
 
 	b2FrictionCallback* frictionCallback;
 	b2RestitutionCallback* restitutionCallback;
