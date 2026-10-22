@@ -296,38 +296,34 @@ static void b2PrepareRevoluteGeometry( b2JointSim* base, b2StepContext* context,
 	float iA = base->invIA, iB = base->invIB;
 	bool fixedRotation = ( iA + iB == 0.0f );
 
-	// The biased solve precedes position integration, so its geometry cannot be reused.
-	if ( useBias || joint->relaxGeometryValid == false )
+	joint->relaxAnchorA = b2RotateVector( stateA->deltaRotation, joint->anchorA );
+	joint->relaxAnchorB = b2RotateVector( stateB->deltaRotation, joint->anchorB );
+	b2Vec2 rA = joint->relaxAnchorA;
+	b2Vec2 rB = joint->relaxAnchorB;
+	b2Mat22 K;
+	K.cx.x = mA + mB + rA.y * rA.y * iA + rB.y * rB.y * iB;
+	K.cy.x = -rA.y * rA.x * iA - rB.y * rB.x * iB;
+	K.cx.y = K.cy.x;
+	K.cy.y = mA + mB + rA.x * rA.x * iA + rB.x * rB.x * iB;
+	joint->relaxK = K;
+	float det = K.cx.x * K.cy.y - K.cy.x * K.cx.y;
+	joint->relaxInvDet = det != 0.0f ? 1.0f / det : det;
+	if ( ( joint->enableSpring || joint->enableLimit ) && fixedRotation == false )
 	{
-		joint->relaxAnchorA = b2RotateVector( stateA->deltaRotation, joint->anchorA );
-		joint->relaxAnchorB = b2RotateVector( stateB->deltaRotation, joint->anchorB );
-		b2Vec2 rA = joint->relaxAnchorA;
-		b2Vec2 rB = joint->relaxAnchorB;
-		b2Mat22 K;
-		K.cx.x = mA + mB + rA.y * rA.y * iA + rB.y * rB.y * iB;
-		K.cy.x = -rA.y * rA.x * iA - rB.y * rB.x * iB;
-		K.cx.y = K.cy.x;
-		K.cy.y = mA + mB + rA.x * rA.x * iA + rB.x * rB.x * iB;
-		joint->relaxK = K;
-		float det = K.cx.x * K.cy.y - K.cy.x * K.cx.y;
-		joint->relaxInvDet = det != 0.0f ? 1.0f / det : det;
-		if ( ( joint->enableSpring || joint->enableLimit ) && fixedRotation == false )
+		float angle = b2RelativeAngle( stateB->deltaRotation, stateA->deltaRotation ) + joint->deltaAngle;
+		if ( joint->enableSpring )
 		{
-			float angle = b2RelativeAngle( stateB->deltaRotation, stateA->deltaRotation ) + joint->deltaAngle;
-			if ( joint->enableSpring )
+			joint->relaxSpringBias = joint->springSoftness.biasRate * b2UnwindAngle( angle - joint->targetAngle );
+		}
+		if ( joint->enableLimit )
+		{
+			joint->relaxLimitAngle = b2UnwindAngle( angle - joint->referenceAngle );
+			if ( useBias == false )
 			{
-				joint->relaxSpringBias = joint->springSoftness.biasRate * b2UnwindAngle( angle - joint->targetAngle );
-			}
-			if ( joint->enableLimit )
-			{
-				joint->relaxLimitAngle = b2UnwindAngle( angle - joint->referenceAngle );
-				if ( useBias == false )
-				{
-					float lowerC = joint->relaxLimitAngle - joint->lowerAngle;
-					float upperC = joint->upperAngle - joint->relaxLimitAngle;
-					joint->relaxLowerBias = lowerC > 0.0f ? lowerC * context->inv_h : 0.0f;
-					joint->relaxUpperBias = upperC > 0.0f ? upperC * context->inv_h : 0.0f;
-				}
+				float lowerC = joint->relaxLimitAngle - joint->lowerAngle;
+				float upperC = joint->upperAngle - joint->relaxLimitAngle;
+				joint->relaxLowerBias = lowerC > 0.0f ? lowerC * context->inv_h : 0.0f;
+				joint->relaxUpperBias = upperC > 0.0f ? upperC * context->inv_h : 0.0f;
 			}
 		}
 	}
@@ -358,7 +354,11 @@ void b2SolveRevoluteJoint( b2JointSim* base, b2StepContext* context, bool useBia
 
 	bool fixedRotation = ( iA + iB == 0.0f );
 
-	b2PrepareRevoluteGeometry( base, context, useBias, stateA, stateB );
+	// The biased solve precedes position integration, so its geometry cannot be reused.
+	if ( useBias || joint->relaxGeometryValid == false )
+	{
+		b2PrepareRevoluteGeometry( base, context, useBias, stateA, stateB );
+	}
 
 	// Solve spring.
 	if ( joint->enableSpring && fixedRotation == false )
