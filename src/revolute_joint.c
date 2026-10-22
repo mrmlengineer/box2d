@@ -247,6 +247,7 @@ void b2PrepareRevoluteJoint( b2JointSim* base, b2StepContext* context )
 	joint->axialMass = k > 0.0f ? 1.0f / k : 0.0f;
 
 	joint->springSoftness = b2MakeSoft( joint->hertz, joint->dampingRatio, context->h );
+	joint->maxMotorImpulse = context->h * joint->maxMotorTorque;
 	joint->relaxGeometryValid = false;
 
 	if ( context->enableWarmStarting == false )
@@ -328,7 +329,22 @@ void b2SolveRevoluteJoint( b2JointSim* base, b2StepContext* context, bool useBia
 		joint->relaxInvDet = det != 0.0f ? 1.0f / det : det;
 		if ( ( joint->enableSpring || joint->enableLimit ) && fixedRotation == false )
 		{
-			joint->relaxAngle = b2RelativeAngle( stateB->deltaRotation, stateA->deltaRotation );
+			float angle = b2RelativeAngle( stateB->deltaRotation, stateA->deltaRotation ) + joint->deltaAngle;
+			if ( joint->enableSpring )
+			{
+				joint->relaxSpringBias = joint->springSoftness.biasRate * b2UnwindAngle( angle - joint->targetAngle );
+			}
+			if ( joint->enableLimit )
+			{
+				joint->relaxLimitAngle = b2UnwindAngle( angle - joint->referenceAngle );
+				if ( useBias == false )
+				{
+					float lowerC = joint->relaxLimitAngle - joint->lowerAngle;
+					float upperC = joint->upperAngle - joint->relaxLimitAngle;
+					joint->relaxLowerBias = lowerC > 0.0f ? lowerC * context->inv_h : 0.0f;
+					joint->relaxUpperBias = upperC > 0.0f ? upperC * context->inv_h : 0.0f;
+				}
+			}
 		}
 	}
 	joint->relaxGeometryValid = !useBias;
@@ -336,11 +352,7 @@ void b2SolveRevoluteJoint( b2JointSim* base, b2StepContext* context, bool useBia
 	// Solve spring.
 	if ( joint->enableSpring && fixedRotation == false )
 	{
-		float jointAngle = joint->relaxAngle + joint->deltaAngle;
-		float jointAngleDelta = b2UnwindAngle( jointAngle - joint->targetAngle );
-
-		float C = jointAngleDelta;
-		float bias = joint->springSoftness.biasRate * C;
+		float bias = joint->relaxSpringBias;
 		float massScale = joint->springSoftness.massScale;
 		float impulseScale = joint->springSoftness.impulseScale;
 
@@ -358,7 +370,7 @@ void b2SolveRevoluteJoint( b2JointSim* base, b2StepContext* context, bool useBia
 		float Cdot = wB - wA - joint->motorSpeed;
 		float impulse = -joint->axialMass * Cdot;
 		float oldImpulse = joint->motorImpulse;
-		float maxImpulse = context->h * joint->maxMotorTorque;
+		float maxImpulse = joint->maxMotorImpulse;
 		joint->motorImpulse = b2ClampFloat( joint->motorImpulse + impulse, -maxImpulse, maxImpulse );
 		impulse = joint->motorImpulse - oldImpulse;
 
@@ -368,25 +380,29 @@ void b2SolveRevoluteJoint( b2JointSim* base, b2StepContext* context, bool useBia
 
 	if ( joint->enableLimit && fixedRotation == false )
 	{
-		float jointAngle = joint->relaxAngle + joint->deltaAngle - joint->referenceAngle;
-		jointAngle = b2UnwindAngle( jointAngle );
-
 		// Lower limit
 		{
-			float C = jointAngle - joint->lowerAngle;
-			float bias = 0.0f;
+			float bias;
 			float massScale = 1.0f;
 			float impulseScale = 0.0f;
-			if ( C > 0.0f )
+			if ( useBias )
 			{
-				// speculation
-				bias = C * context->inv_h;
+				float C = joint->relaxLimitAngle - joint->lowerAngle;
+				if ( C > 0.0f )
+				{
+					// speculation
+					bias = C * context->inv_h;
+				}
+				else
+				{
+					bias = base->constraintSoftness.biasRate * C;
+					massScale = base->constraintSoftness.massScale;
+					impulseScale = base->constraintSoftness.impulseScale;
+				}
 			}
-			else if ( useBias )
+			else
 			{
-				bias = base->constraintSoftness.biasRate * C;
-				massScale = base->constraintSoftness.massScale;
-				impulseScale = base->constraintSoftness.impulseScale;
+				bias = joint->relaxLowerBias;
 			}
 
 			float Cdot = wB - wA;
@@ -403,20 +419,27 @@ void b2SolveRevoluteJoint( b2JointSim* base, b2StepContext* context, bool useBia
 		// Note: signs are flipped to keep C positive when the constraint is satisfied.
 		// This also keeps the impulse positive when the limit is active.
 		{
-			float C = joint->upperAngle - jointAngle;
-			float bias = 0.0f;
+			float bias;
 			float massScale = 1.0f;
 			float impulseScale = 0.0f;
-			if ( C > 0.0f )
+			if ( useBias )
 			{
-				// speculation
-				bias = C * context->inv_h;
+				float C = joint->upperAngle - joint->relaxLimitAngle;
+				if ( C > 0.0f )
+				{
+					// speculation
+					bias = C * context->inv_h;
+				}
+				else
+				{
+					bias = base->constraintSoftness.biasRate * C;
+					massScale = base->constraintSoftness.massScale;
+					impulseScale = base->constraintSoftness.impulseScale;
+				}
 			}
-			else if ( useBias )
+			else
 			{
-				bias = base->constraintSoftness.biasRate * C;
-				massScale = base->constraintSoftness.massScale;
-				impulseScale = base->constraintSoftness.impulseScale;
+				bias = joint->relaxUpperBias;
 			}
 
 			// sign flipped on Cdot
