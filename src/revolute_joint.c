@@ -616,9 +616,10 @@ struct b2RevoluteGroup
 	b2RevoluteWide mA, mB, iA, iB, axialMass, maxImpulse, speed;
 	b2RevoluteWide rAx, rAy, rBx, rBy, k11, k12, k22, invDet, lowerBias, upperBias;
 	b2RevoluteWide motor, lower, upper, linearX, linearY;
+	b2RevoluteWide pointMass, pointScale, biasRate, biasX, biasY;
 	int indexA[4], indexB[4];
 	int eligible; // -1 until first solve, then fixed for this world step
-	int remaining; // relaxation passes left; packed impulses are written back at zero
+	int remaining; // passes left in this phase; relaxation writes packed impulses back at zero
 };
 
 int b2GetRevoluteGroupSize( void )
@@ -677,6 +678,11 @@ static __m128 b2NegRevoluteWide( __m128 a )
 	return _mm_xor_ps( a, _mm_set1_ps( -0.0f ) );
 }
 
+static __m128 b2SelectRevoluteWide( __m128 mask, __m128 a, __m128 b )
+{
+	return _mm_or_ps( _mm_and_ps( mask, a ), _mm_andnot_ps( mask, b ) );
+}
+
 void b2SolveRevoluteGroup( b2RevoluteGroup* g, b2JointSim* joints, int count, b2StepContext* context, bool useBias )
 {
 	// First biased solve follows joint preparation, which supplies the current body indices and masses.
@@ -697,7 +703,7 @@ void b2SolveRevoluteGroup( b2RevoluteGroup* g, b2JointSim* joints, int count, b2
 			g->indexB[lane] = j->indexB;
 		}
 	}
-	if ( useBias || !g->eligible )
+	if ( !g->eligible )
 	{
 		for ( int lane = 0; lane < count; ++lane )
 		{
@@ -706,7 +712,7 @@ void b2SolveRevoluteGroup( b2RevoluteGroup* g, b2JointSim* joints, int count, b2
 		g->remaining = 0;
 		return;
 	}
-	if ( g->remaining == 0 )
+	if ( useBias || g->remaining == 0 )
 	{
 		for ( int lane = 0; lane < count; ++lane )
 		{
@@ -714,7 +720,7 @@ void b2SolveRevoluteGroup( b2RevoluteGroup* g, b2JointSim* joints, int count, b2
 			b2RevoluteJoint* j = &base->revoluteJoint;
 			const b2BodyState* a = j->indexA == B2_NULL_INDEX ? &b2_identityBodyState : context->states + j->indexA;
 			const b2BodyState* b = j->indexB == B2_NULL_INDEX ? &b2_identityBodyState : context->states + j->indexB;
-			b2PrepareRevoluteGeometry( base, context, false, a, b );
+			b2PrepareRevoluteGeometry( base, context, useBias, a, b );
 			g->mA.lane[lane] = base->invMassA;
 			g->mB.lane[lane] = base->invMassB;
 			g->iA.lane[lane] = base->invIA;
@@ -732,13 +738,26 @@ void b2SolveRevoluteGroup( b2RevoluteGroup* g, b2JointSim* joints, int count, b2
 			g->invDet.lane[lane] = j->relaxInvDet;
 			g->lowerBias.lane[lane] = j->relaxLowerBias;
 			g->upperBias.lane[lane] = j->relaxUpperBias;
-			g->motor.lane[lane] = j->motorImpulse;
-			g->lower.lane[lane] = j->lowerImpulse;
-			g->upper.lane[lane] = j->upperImpulse;
-			g->linearX.lane[lane] = j->linearImpulse.x;
-			g->linearY.lane[lane] = j->linearImpulse.y;
+			if ( useBias )
+			{
+				g->lowerBias.lane[lane] = j->relaxLimitAngle - j->lowerAngle;
+				g->upperBias.lane[lane] = j->upperAngle - j->relaxLimitAngle;
+				g->biasRate.lane[lane] = base->constraintSoftness.biasRate;
+				b2Vec2 separation = b2Add( b2Add( b2Sub( b->deltaPosition, a->deltaPosition ),
+					b2Sub( j->relaxAnchorB, j->relaxAnchorA ) ), j->deltaCenter );
+				g->biasX.lane[lane] = base->constraintSoftness.biasRate * separation.x;
+				g->biasY.lane[lane] = base->constraintSoftness.biasRate * separation.y;
+				g->pointMass.lane[lane] = -base->constraintSoftness.massScale;
+				g->pointScale.lane[lane] = base->constraintSoftness.impulseScale;
+				// Keep these packed through the following relaxation, which refreshes only geometry.
+				g->motor.lane[lane] = j->motorImpulse;
+				g->lower.lane[lane] = j->lowerImpulse;
+				g->upper.lane[lane] = j->upperImpulse;
+				g->linearX.lane[lane] = j->linearImpulse.x;
+				g->linearY.lane[lane] = j->linearImpulse.y;
+			}
 		}
-		g->remaining = context->world->relaxIterations;
+		g->remaining = useBias ? 1 : context->world->relaxIterations;
 	}
 
 	__m128 ax, ay, aw, af, bx, by, bw, bf;
@@ -756,9 +775,27 @@ void b2SolveRevoluteGroup( b2RevoluteGroup* g, b2JointSim* joints, int count, b2
 	aw = _mm_sub_ps( aw, _mm_mul_ps( g->iA.v, impulse ) );
 	bw = _mm_add_ps( bw, _mm_mul_ps( g->iB.v, impulse ) );
 
+	__m128 lowerMass = negMass, upperMass = negMass, lowerScale = zero, upperScale = zero;
+	__m128 biasX = zero, biasY = zero, pointScale = zero;
+	if ( useBias )
+	{
+		__m128 lowerMask = _mm_cmpgt_ps( g->lowerBias.v, zero );
+		__m128 upperMask = _mm_cmpgt_ps( g->upperBias.v, zero );
+		__m128 inv_h = _mm_set1_ps( context->inv_h );
+		__m128 softMass = _mm_mul_ps( g->pointMass.v, g->axialMass.v );
+		lowerMass = b2SelectRevoluteWide( lowerMask, negMass, softMass );
+		upperMass = b2SelectRevoluteWide( upperMask, negMass, softMass );
+		lowerScale = _mm_andnot_ps( lowerMask, g->pointScale.v );
+		upperScale = _mm_andnot_ps( upperMask, g->pointScale.v );
+		g->lowerBias.v = _mm_mul_ps( b2SelectRevoluteWide( lowerMask, inv_h, g->biasRate.v ), g->lowerBias.v );
+		g->upperBias.v = _mm_mul_ps( b2SelectRevoluteWide( upperMask, inv_h, g->biasRate.v ), g->upperBias.v );
+		biasX = g->biasX.v;
+		biasY = g->biasY.v;
+		pointScale = g->pointScale.v;
+	}
 	old = g->lower.v;
 	cdot = _mm_sub_ps( bw, aw );
-	impulse = _mm_sub_ps( _mm_mul_ps( negMass, _mm_add_ps( cdot, g->lowerBias.v ) ), _mm_mul_ps( zero, old ) );
+	impulse = _mm_sub_ps( _mm_mul_ps( lowerMass, _mm_add_ps( cdot, g->lowerBias.v ) ), _mm_mul_ps( lowerScale, old ) );
 	g->lower.v = _mm_max_ps( _mm_add_ps( old, impulse ), zero );
 	impulse = _mm_sub_ps( g->lower.v, old );
 	aw = _mm_sub_ps( aw, _mm_mul_ps( g->iA.v, impulse ) );
@@ -766,20 +803,30 @@ void b2SolveRevoluteGroup( b2RevoluteGroup* g, b2JointSim* joints, int count, b2
 
 	old = g->upper.v;
 	cdot = _mm_sub_ps( aw, bw );
-	impulse = _mm_sub_ps( _mm_mul_ps( negMass, _mm_add_ps( cdot, g->upperBias.v ) ), _mm_mul_ps( zero, old ) );
+	impulse = _mm_sub_ps( _mm_mul_ps( upperMass, _mm_add_ps( cdot, g->upperBias.v ) ), _mm_mul_ps( upperScale, old ) );
 	g->upper.v = _mm_max_ps( _mm_add_ps( old, impulse ), zero );
 	impulse = _mm_sub_ps( g->upper.v, old );
 	aw = _mm_add_ps( aw, _mm_mul_ps( g->iA.v, impulse ) );
 	bw = _mm_sub_ps( bw, _mm_mul_ps( g->iB.v, impulse ) );
 
 	__m128 rx = _mm_add_ps( _mm_sub_ps( _mm_add_ps( bx, _mm_mul_ps( b2NegRevoluteWide( bw ), g->rBy.v ) ),
-		_mm_add_ps( ax, _mm_mul_ps( b2NegRevoluteWide( aw ), g->rAy.v ) ) ), zero );
+		_mm_add_ps( ax, _mm_mul_ps( b2NegRevoluteWide( aw ), g->rAy.v ) ) ), biasX );
 	__m128 ry = _mm_add_ps( _mm_sub_ps( _mm_add_ps( by, _mm_mul_ps( bw, g->rBx.v ) ),
-		_mm_add_ps( ay, _mm_mul_ps( aw, g->rAx.v ) ) ), zero );
+		_mm_add_ps( ay, _mm_mul_ps( aw, g->rAx.v ) ) ), biasY );
 	__m128 x = _mm_mul_ps( g->invDet.v, _mm_sub_ps( _mm_mul_ps( g->k22.v, rx ), _mm_mul_ps( g->k12.v, ry ) ) );
 	__m128 y = _mm_mul_ps( g->invDet.v, _mm_sub_ps( _mm_mul_ps( g->k11.v, ry ), _mm_mul_ps( g->k12.v, rx ) ) );
-	x = _mm_sub_ps( b2NegRevoluteWide( x ), _mm_mul_ps( zero, g->linearX.v ) );
-	y = _mm_sub_ps( b2NegRevoluteWide( y ), _mm_mul_ps( zero, g->linearY.v ) );
+	if ( useBias )
+	{
+		x = _mm_mul_ps( g->pointMass.v, x );
+		y = _mm_mul_ps( g->pointMass.v, y );
+	}
+	else
+	{
+		x = b2NegRevoluteWide( x );
+		y = b2NegRevoluteWide( y );
+	}
+	x = _mm_sub_ps( x, _mm_mul_ps( pointScale, g->linearX.v ) );
+	y = _mm_sub_ps( y, _mm_mul_ps( pointScale, g->linearY.v ) );
 	g->linearX.v = _mm_add_ps( g->linearX.v, x );
 	g->linearY.v = _mm_add_ps( g->linearY.v, y );
 	ax = _mm_sub_ps( ax, _mm_mul_ps( g->mA.v, x ) );
@@ -791,7 +838,7 @@ void b2SolveRevoluteGroup( b2RevoluteGroup* g, b2JointSim* joints, int count, b2
 	b2ScatterRevoluteVelocities( context->states, g->indexA, ax, ay, aw, af );
 	b2ScatterRevoluteVelocities( context->states, g->indexB, bx, by, bw, bf );
 
-	if ( --g->remaining == 0 )
+	if ( --g->remaining == 0 && !useBias )
 	{
 		for ( int lane = 0; lane < count; ++lane )
 		{
