@@ -480,6 +480,11 @@ B2_INLINE float b2RelativeAngle( b2Rot b, b2Rot a )
 /// Convert any angle into the range [-pi, pi]
 B2_INLINE float b2UnwindAngle( float radians )
 {
+	// The nearest multiple of 2*pi is zero throughout this range, including the ties.
+	if ( -B2_PI <= radians && radians <= B2_PI )
+	{
+		return radians;
+	}
 	// Assuming this is deterministic
 	return remainderf( radians, 2.0f * B2_PI );
 }
