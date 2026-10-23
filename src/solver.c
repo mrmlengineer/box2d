@@ -61,6 +61,43 @@ typedef struct b2WorkerContext
 	void* userTask;
 } b2WorkerContext;
 
+typedef struct b2BodyIntegration
+{
+	float linearDamping;
+	float angularDamping;
+	b2Vec2 linearVelocityDelta;
+	float angularVelocityDelta;
+} b2BodyIntegration;
+
+// These coefficients stay fixed through the substeps and are rebuilt each world step.
+static void b2PrepareBodyIntegration( int bodyCount, b2StepContext* context )
+{
+	float h = context->h;
+	b2Vec2 gravity = context->world->gravity;
+	for ( int i = 0; i < bodyCount; ++i )
+	{
+		const b2BodySim* sim = context->sims + i;
+		b2BodyIntegration* integration = context->bodyIntegration + i;
+		// Apply forces, torque, gravity, and damping
+		// Apply damping.
+		// Differential equation: dv/dt + c * v = 0
+		// Solution: v(t) = v0 * exp(-c * t)
+		// Time step: v(t + dt) = v0 * exp(-c * (t + dt)) = v0 * exp(-c * t) * exp(-c * dt) = v(t) * exp(-c * dt)
+		// v2 = exp(-c * dt) * v1
+		// Pade approximation:
+		// v2 = v1 * 1 / (1 + c * dt)
+		integration->linearDamping = 1.0f / ( 1.0f + h * sim->linearDamping );
+		integration->angularDamping = 1.0f / ( 1.0f + h * sim->angularDamping );
+
+		// Gravity scale will be zero for kinematic bodies
+		float gravityScale = sim->invMass > 0.0f ? sim->gravityScale : 0.0f;
+
+		// lvd = h * im * f + h * g
+		integration->linearVelocityDelta = b2Add( b2MulSV( h * sim->invMass, sim->force ), b2MulSV( h * gravityScale, gravity ) );
+		integration->angularVelocityDelta = h * sim->invInertia * sim->torque;
+	}
+}
+
 // Integrate velocities and apply damping
 static void b2IntegrateVelocitiesTask( int startIndex, int endIndex, b2StepContext* context )
 {
@@ -69,8 +106,6 @@ static void b2IntegrateVelocitiesTask( int startIndex, int endIndex, b2StepConte
 	b2BodyState* states = context->states;
 	b2BodySim* sims = context->sims;
 
-	b2Vec2 gravity = context->world->gravity;
-	float h = context->h;
 	float maxLinearSpeed = context->maxLinearVelocity;
 	float maxAngularSpeed = B2_MAX_ROTATION * context->inv_dt;
 	float maxLinearSpeedSquared = maxLinearSpeed * maxLinearSpeed;
@@ -84,26 +119,9 @@ static void b2IntegrateVelocitiesTask( int startIndex, int endIndex, b2StepConte
 		b2Vec2 v = state->linearVelocity;
 		float w = state->angularVelocity;
 
-		// Apply forces, torque, gravity, and damping
-		// Apply damping.
-		// Differential equation: dv/dt + c * v = 0
-		// Solution: v(t) = v0 * exp(-c * t)
-		// Time step: v(t + dt) = v0 * exp(-c * (t + dt)) = v0 * exp(-c * t) * exp(-c * dt) = v(t) * exp(-c * dt)
-		// v2 = exp(-c * dt) * v1
-		// Pade approximation:
-		// v2 = v1 * 1 / (1 + c * dt)
-		float linearDamping = 1.0f / ( 1.0f + h * sim->linearDamping );
-		float angularDamping = 1.0f / ( 1.0f + h * sim->angularDamping );
-
-		// Gravity scale will be zero for kinematic bodies
-		float gravityScale = sim->invMass > 0.0f ? sim->gravityScale : 0.0f;
-
-		// lvd = h * im * f + h * g
-		b2Vec2 linearVelocityDelta = b2Add( b2MulSV( h * sim->invMass, sim->force ), b2MulSV( h * gravityScale, gravity ) );
-		float angularVelocityDelta = h * sim->invInertia * sim->torque;
-
-		v = b2MulAdd( linearVelocityDelta, linearDamping, v );
-		w = angularVelocityDelta + angularDamping * w;
+		const b2BodyIntegration* integration = context->bodyIntegration + i;
+		v = b2MulAdd( integration->linearVelocityDelta, integration->linearDamping, v );
+		w = integration->angularVelocityDelta + integration->angularDamping * w;
 
 		// Clamp to max linear speed
 		if ( b2Dot( v, v ) > maxLinearSpeedSquared )
@@ -1240,6 +1258,9 @@ void b2Solve( b2World* world, b2StepContext* stepContext )
 
 		stepContext->sims = awakeSet->bodySims.data;
 		stepContext->states = awakeSet->bodyStates.data;
+		stepContext->bodyIntegration =
+			b2AllocateArenaItem( &world->arena, awakeBodyCount * sizeof( b2BodyIntegration ), "body integration" );
+		b2PrepareBodyIntegration( awakeBodyCount, stepContext );
 
 		// count contacts, joints, and colors
 		int awakeJointCount = 0;
@@ -1784,6 +1805,7 @@ void b2Solve( b2World* world, b2StepContext* stepContext )
 		b2FreeArenaItem( &world->arena, simdContactConstraints );
 		b2FreeArenaItem( &world->arena, joints );
 		b2FreeArenaItem( &world->arena, contacts );
+		b2FreeArenaItem( &world->arena, stepContext->bodyIntegration );
 
 		world->profile.transforms = b2GetMilliseconds( transformTicks );
 		b2TracyCZoneEnd( update_transforms );

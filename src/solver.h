@@ -104,6 +104,8 @@ typedef struct b2StepContext
 	// shortcut to body sims from awake set
 	b2BodySim* sims;
 
+	struct b2BodyIntegration* bodyIntegration;
+
 	// array of all shape ids for shapes that have enlarged AABBs
 	int* enlargedShapes;
 	int enlargedShapeCount;
