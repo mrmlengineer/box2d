@@ -160,6 +160,46 @@ B2_INLINE float b2ClampFloat( float a, float lower, float upper )
 ///	Accurate to around 0.0023 degrees
 B2_API float b2Atan2( float y, float x );
 
+// Shared implementation allows rotation helpers to inline without duplicating the formula.
+B2_INLINE float b2Atan2Inline( float y, float x )
+{
+	// A safe divisor lets the compiler evaluate zero-input lanes without an early return.
+	bool bothZero = x == 0.0f && y == 0.0f;
+
+	float ax = b2AbsFloat( x );
+	float ay = b2AbsFloat( y );
+	float mx = bothZero ? 1.0f : b2MaxFloat( ay, ax );
+	float mn = b2MinFloat( ay, ax );
+	float a = mn / mx;
+
+	// Evaluate with second-order Horner grouping; preserve the rounding order.
+	float s = a * a;
+	float c = s * a;
+	float q = s * s;
+	float r = b2_atanC9 * q + b2_atanC5;
+	float t = b2_atanC7 * q - b2_atanC3;
+	r = r * s + t;
+	r = r * c + a;
+
+	// Map to full circle
+	if ( ay > ax )
+	{
+		r = 0.5f * B2_PI - r;
+	}
+
+	if ( x < 0 )
+	{
+		r = B2_PI - r;
+	}
+
+	if ( y < 0 )
+	{
+		r = -r;
+	}
+
+	return bothZero ? 0.0f : r;
+}
+
 /// Compute the cosine and sine of an angle in radians. Implemented
 /// for cross-platform determinism.
 B2_API b2CosSin b2ComputeCosSin( float radians );
@@ -482,7 +522,7 @@ B2_INLINE float b2RelativeAngle( b2Rot b, b2Rot a )
 	// cos(b - a) = bc * ac + bs * as
 	float s = b.s * a.c - b.c * a.s;
 	float c = b.c * a.c + b.s * a.s;
-	return b2Atan2( s, c );
+	return b2Atan2Inline( s, c );
 }
 
 /// Convert any angle into the range [-pi, pi]

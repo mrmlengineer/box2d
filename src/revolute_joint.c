@@ -5,6 +5,11 @@
 #define _CRT_SECURE_NO_WARNINGS
 #endif
 
+// Assume masked floating-point exceptions so GCC can vectorize the guarded angle loop.
+#if defined( __GNUC__ ) && !defined( __clang__ )
+#pragma GCC optimize( "no-trapping-math" )
+#endif
+
 #include "body.h"
 #include "core.h"
 #include "joint.h"
@@ -705,6 +710,14 @@ static void b2PrepareRevoluteGroup( b2RevoluteGroup* g, b2JointSim* joints, int 
 	__m128 ax, ay, ac, as, bx, by, bc, bs;
 	b2GatherRevolutePoses( context->states, g->indexA, &ax, &ay, &ac, &as );
 	b2GatherRevolutePoses( context->states, g->indexB, &bx, &by, &bc, &bs );
+	b2RevoluteWide cosA = { .v = ac }, sinA = { .v = as }, cosB = { .v = bc }, sinB = { .v = bs }, angles;
+	// Unused lanes have identity rotations from the pose gather.
+	for ( int lane = 0; lane < 4; ++lane )
+	{
+		b2Rot a = { cosA.lane[lane], sinA.lane[lane] };
+		b2Rot b = { cosB.lane[lane], sinB.lane[lane] };
+		angles.lane[lane] = b2RelativeAngle( b, a );
+	}
 	g->rAx.v = _mm_sub_ps( _mm_mul_ps( ac, g->anchorAx.v ), _mm_mul_ps( as, g->anchorAy.v ) );
 	g->rAy.v = _mm_add_ps( _mm_mul_ps( as, g->anchorAx.v ), _mm_mul_ps( ac, g->anchorAy.v ) );
 	g->rBx.v = _mm_sub_ps( _mm_mul_ps( bc, g->anchorBx.v ), _mm_mul_ps( bs, g->anchorBy.v ) );
@@ -730,9 +743,7 @@ static void b2PrepareRevoluteGroup( b2RevoluteGroup* g, b2JointSim* joints, int 
 	for ( int lane = 0; lane < count; ++lane )
 	{
 		b2RevoluteJoint* j = &joints[lane].revoluteJoint;
-		const b2BodyState* a = j->indexA == B2_NULL_INDEX ? &b2_identityBodyState : context->states + j->indexA;
-		const b2BodyState* b = j->indexB == B2_NULL_INDEX ? &b2_identityBodyState : context->states + j->indexB;
-		float angle = b2RelativeAngle( b->deltaRotation, a->deltaRotation ) + j->deltaAngle;
+		float angle = angles.lane[lane] + j->deltaAngle;
 		angle = b2UnwindAngle( angle - j->referenceAngle );
 		g->lowerBias.lane[lane] = angle - j->lowerAngle;
 		g->upperBias.lane[lane] = j->upperAngle - angle;

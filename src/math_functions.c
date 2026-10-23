@@ -59,44 +59,7 @@ bool b2IsValidPlane( b2Plane a )
 
 float b2Atan2( float y, float x )
 {
-	// Added check for (0,0) to match atan2f and avoid NaN
-	if (x == 0.0f && y == 0.0f)
-	{
-		return 0.0f;
-	}
-
-	float ax = b2AbsFloat( x );
-	float ay = b2AbsFloat( y );
-	float mx = b2MaxFloat( ay, ax );
-	float mn = b2MinFloat( ay, ax );
-	float a = mn / mx;
-
-	// Evaluate with second-order Horner grouping; preserve the rounding order.
-	float s = a * a;
-	float c = s * a;
-	float q = s * s;
-	float r = b2_atanC9 * q + b2_atanC5;
-	float t = b2_atanC7 * q - b2_atanC3;
-	r = r * s + t;
-	r = r * c + a;
-
-	// Map to full circle
-	if ( ay > ax )
-	{
-		r = 0.5f * B2_PI - r;
-	}
-
-	if ( x < 0 )
-	{
-		r = B2_PI - r;
-	}
-
-	if ( y < 0 )
-	{
-		r = -r;
-	}
-
-	return r;
+	return b2Atan2Inline( y, x );
 }
 
 // Approximate cosine and sine for determinism. In my testing cosf and sinf produced
