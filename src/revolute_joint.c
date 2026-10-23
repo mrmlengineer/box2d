@@ -631,6 +631,7 @@ struct b2RevoluteGroup
 	int eligible; // -1 until first solve, then fixed for this world step
 	int remaining; // passes left in this phase; relaxation writes packed impulses back at zero
 	b2RevoluteWide anchorAx, anchorAy, anchorBx, anchorBy, centerX, centerY;
+	b2RevoluteWide lowerC, upperC; // pose errors retained independently of phase biases
 };
 
 int b2GetRevoluteGroupSize( void )
@@ -709,8 +710,8 @@ static inline void b2GatherRevolutePoses( const b2BodyState* states, const int* 
 	*s = e;
 }
 
-static void b2PrepareRevoluteGroup( b2RevoluteGroup* g, b2JointSim* joints, int count,
-                                    b2StepContext* context, bool useBias )
+static void b2PrepareRevoluteGroupGeometry( b2RevoluteGroup* g, b2JointSim* joints, int count,
+                                            b2StepContext* context )
 {
 	__m128 ax, ay, ac, as, bx, by, bc, bs;
 	b2GatherRevolutePoses( context->states, g->indexA, &ax, &ay, &ac, &as );
@@ -738,22 +739,34 @@ static void b2PrepareRevoluteGroup( b2RevoluteGroup* g, b2JointSim* joints, int 
 	__m128 nonzero = _mm_cmpneq_ps( det, _mm_setzero_ps() );
 	__m128 divisor = b2SelectRevoluteWide( nonzero, det, _mm_set1_ps( 1.0f ) );
 	g->invDet.v = b2SelectRevoluteWide( nonzero, _mm_div_ps( _mm_set1_ps( 1.0f ), divisor ), det );
-	if ( useBias )
-	{
-		g->biasX.v = _mm_mul_ps( g->biasRate.v,
-			_mm_add_ps( _mm_add_ps( _mm_sub_ps( bx, ax ), _mm_sub_ps( g->rBx.v, g->rAx.v ) ), g->centerX.v ) );
-		g->biasY.v = _mm_mul_ps( g->biasRate.v,
-			_mm_add_ps( _mm_add_ps( _mm_sub_ps( by, ay ), _mm_sub_ps( g->rBy.v, g->rAy.v ) ), g->centerY.v ) );
-	}
+	g->biasX.v = _mm_mul_ps( g->biasRate.v,
+		_mm_add_ps( _mm_add_ps( _mm_sub_ps( bx, ax ), _mm_sub_ps( g->rBx.v, g->rAx.v ) ), g->centerX.v ) );
+	g->biasY.v = _mm_mul_ps( g->biasRate.v,
+		_mm_add_ps( _mm_add_ps( _mm_sub_ps( by, ay ), _mm_sub_ps( g->rBy.v, g->rAy.v ) ), g->centerY.v ) );
 	for ( int lane = 0; lane < count; ++lane )
 	{
 		b2RevoluteJoint* j = &joints[lane].revoluteJoint;
 		float angle = angles.lane[lane] + j->deltaAngle;
 		angle = b2UnwindAngle( angle - j->referenceAngle );
-		g->lowerBias.lane[lane] = angle - j->lowerAngle;
-		g->upperBias.lane[lane] = j->upperAngle - angle;
-		if ( useBias )
+		g->lowerC.lane[lane] = angle - j->lowerAngle;
+		g->upperC.lane[lane] = j->upperAngle - angle;
+	}
+}
+
+static void b2PrepareRevoluteGroup( b2RevoluteGroup* g, b2JointSim* joints, int count,
+                                    b2StepContext* context, bool useBias )
+{
+	// Geometry is initialized on the first solve and refreshed after position integration.
+	// Velocity integration and warm starting preserve it for the next biased phase.
+	if ( !useBias )
+	{
+		b2PrepareRevoluteGroupGeometry( g, joints, count, context );
+	}
+	if ( useBias )
+	{
+		for ( int lane = 0; lane < count; ++lane )
 		{
+			b2RevoluteJoint* j = &joints[lane].revoluteJoint;
 			g->motor.lane[lane] = j->motorImpulse;
 			g->lower.lane[lane] = j->lowerImpulse;
 			g->upper.lane[lane] = j->upperImpulse;
@@ -761,6 +774,8 @@ static void b2PrepareRevoluteGroup( b2RevoluteGroup* g, b2JointSim* joints, int 
 			g->linearY.lane[lane] = j->linearImpulse.y;
 		}
 	}
+	g->lowerBias.v = g->lowerC.v;
+	g->upperBias.v = g->upperC.v;
 	if ( !useBias )
 	{
 		__m128 zero = _mm_setzero_ps();
@@ -805,6 +820,10 @@ void b2SolveRevoluteGroup( b2RevoluteGroup* g, b2JointSim* joints, int count, b2
 			g->anchorBy.lane[lane] = j->anchorB.y;
 			g->centerX.lane[lane] = j->deltaCenter.x;
 			g->centerY.lane[lane] = j->deltaCenter.y;
+		}
+		if ( g->eligible )
+		{
+			b2PrepareRevoluteGroupGeometry( g, joints, count, context );
 		}
 	}
 	if ( !g->eligible )
