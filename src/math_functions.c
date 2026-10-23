@@ -57,7 +57,6 @@ bool b2IsValidPlane( b2Plane a )
 	return b2IsValidVec2( a.normal ) && b2IsNormalized( a.normal ) && b2IsValidFloat( a.offset );
 }
 
-// https://stackoverflow.com/questions/46210708/atan2-approximation-with-11bits-in-mantissa-on-x86with-sse2-and-armwith-vfpv4
 float b2Atan2( float y, float x )
 {
 	// Added check for (0,0) to match atan2f and avoid NaN
@@ -72,24 +71,24 @@ float b2Atan2( float y, float x )
 	float mn = b2MinFloat( ay, ax );
 	float a = mn / mx;
 
-	// Minimax polynomial approximation to atan(a) on [0,1]
+	// Evaluate with second-order Horner grouping; preserve the rounding order.
 	float s = a * a;
 	float c = s * a;
 	float q = s * s;
-	float r = 0.024840285f * q + 0.18681418f;
-	float t = -0.094097948f * q - 0.33213072f;
+	float r = b2_atanC9 * q + b2_atanC5;
+	float t = b2_atanC7 * q - b2_atanC3;
 	r = r * s + t;
 	r = r * c + a;
 
 	// Map to full circle
 	if ( ay > ax )
 	{
-		r = 1.57079637f - r;
+		r = 0.5f * B2_PI - r;
 	}
 
 	if ( x < 0 )
 	{
-		r = 3.14159274f - r;
+		r = B2_PI - r;
 	}
 
 	if ( y < 0 )

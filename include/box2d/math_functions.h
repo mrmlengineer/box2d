@@ -78,6 +78,14 @@ typedef struct b2Plane
 /// https://en.wikipedia.org/wiki/Pi
 #define B2_PI 3.14159265359f
 
+// Remez minimax coefficients for atan(a) on [0,1]:
+// P(a) = a - c3*a^3 + c5*a^5 + c7*a^7 + c9*a^9.
+// https://stackoverflow.com/questions/46210708/atan2-approximation-with-11bits-in-mantissa-on-x86with-sse2-and-armwith-vfpv4
+static const float b2_atanC3 = 0.33213072f;
+static const float b2_atanC5 = 0.18681418f;
+static const float b2_atanC7 = -0.094097948f;
+static const float b2_atanC9 = 0.024840285f;
+
 static const b2Vec2 b2Vec2_zero = { 0.0f, 0.0f };
 static const b2Rot b2Rot_identity = { 1.0f, 0.0f };
 static const b2Transform b2Transform_identity = { { 0.0f, 0.0f }, { 1.0f, 0.0f } };
