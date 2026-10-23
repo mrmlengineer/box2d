@@ -1338,35 +1338,37 @@ static inline void b2ScatterBodies( b2BodyState* B2_RESTRICT states, int* B2_RES
 	b2FloatW t1 = b2UnpackLoW( simdBody->v.X, simdBody->v.Y );
 	// [vx3 vy3 vx4 vy4]
 	b2FloatW t2 = b2UnpackHiW( simdBody->v.X, simdBody->v.Y );
-	// [w1 f1 w2 f2]
-	b2FloatW t3 = b2UnpackLoW( simdBody->w, simdBody->flags );
-	// [w3 f3 w4 f4]
-	b2FloatW t4 = b2UnpackHiW( simdBody->w, simdBody->flags );
+
+	// Leave flags in memory so they need not stay live through the solve.
 
 	// I don't use any dummy body in the body array because this will lead to multithreaded sharing and the
 	// associated cache flushing.
 	if ( indices[0] != B2_NULL_INDEX )
 	{
-		// [t1.x t1.y t3.x t3.y]
-		b2StoreW( (float*)( states + indices[0] ), _mm_shuffle_ps( t1, t3, _MM_SHUFFLE( 1, 0, 1, 0 ) ) );
+		b2BodyState* state = states + indices[0];
+		_mm_storel_pi( (__m64*)&state->linearVelocity, t1 );
+		_mm_store_ss( &state->angularVelocity, simdBody->w );
 	}
 
 	if ( indices[1] != B2_NULL_INDEX )
 	{
-		// [t1.z t1.w t3.z t3.w]
-		b2StoreW( (float*)( states + indices[1] ), _mm_shuffle_ps( t1, t3, _MM_SHUFFLE( 3, 2, 3, 2 ) ) );
+		b2BodyState* state = states + indices[1];
+		_mm_storeh_pi( (__m64*)&state->linearVelocity, t1 );
+		_mm_store_ss( &state->angularVelocity, _mm_shuffle_ps( simdBody->w, simdBody->w, _MM_SHUFFLE( 1, 1, 1, 1 ) ) );
 	}
 
 	if ( indices[2] != B2_NULL_INDEX )
 	{
-		// [t2.x t2.y t4.x t4.y]
-		b2StoreW( (float*)( states + indices[2] ), _mm_shuffle_ps( t2, t4, _MM_SHUFFLE( 1, 0, 1, 0 ) ) );
+		b2BodyState* state = states + indices[2];
+		_mm_storel_pi( (__m64*)&state->linearVelocity, t2 );
+		_mm_store_ss( &state->angularVelocity, _mm_shuffle_ps( simdBody->w, simdBody->w, _MM_SHUFFLE( 2, 2, 2, 2 ) ) );
 	}
 
 	if ( indices[3] != B2_NULL_INDEX )
 	{
-		// [t2.z t2.w t4.z t4.w]
-		b2StoreW( (float*)( states + indices[3] ), _mm_shuffle_ps( t2, t4, _MM_SHUFFLE( 3, 2, 3, 2 ) ) );
+		b2BodyState* state = states + indices[3];
+		_mm_storeh_pi( (__m64*)&state->linearVelocity, t2 );
+		_mm_store_ss( &state->angularVelocity, _mm_shuffle_ps( simdBody->w, simdBody->w, _MM_SHUFFLE( 3, 3, 3, 3 ) ) );
 	}
 }
 
