@@ -392,7 +392,11 @@ void b2SolveRevoluteJoint( b2JointSim* base, b2StepContext* context, bool useBia
 		float impulse = -joint->axialMass * Cdot;
 		float oldImpulse = joint->motorImpulse;
 		float maxImpulse = joint->maxMotorImpulse;
-		joint->motorImpulse = b2ClampFloat( joint->motorImpulse + impulse, -maxImpulse, maxImpulse );
+		float accumulatedImpulse = joint->motorImpulse + impulse;
+		// Retain the original clamp when a negative torque limit reverses the bounds.
+		joint->motorImpulse = maxImpulse < 0.0f
+			? b2ClampFloat( accumulatedImpulse, -maxImpulse, maxImpulse )
+			: b2MinFloat( maxImpulse, b2MaxFloat( -maxImpulse, accumulatedImpulse ) );
 		impulse = joint->motorImpulse - oldImpulse;
 
 		wA -= iA * impulse;
