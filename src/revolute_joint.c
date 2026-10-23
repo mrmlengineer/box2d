@@ -359,10 +359,15 @@ void b2SolveRevoluteJoint( b2JointSim* base, b2StepContext* context, bool useBia
 
 	bool fixedRotation = ( iA + iB == 0.0f );
 
-	// The biased solve precedes position integration, so its geometry cannot be reused.
-	if ( useBias || joint->relaxGeometryValid == false )
+	if ( joint->relaxGeometryValid == false )
 	{
 		b2PrepareRevoluteGeometry( base, context, useBias, stateA, stateB );
+	}
+	// Relaxation geometry survives velocity integration and warm starting.
+	// Invalidate for the position integration following a biased solve.
+	if ( useBias )
+	{
+		joint->relaxGeometryValid = false;
 	}
 
 	// Solve spring.
