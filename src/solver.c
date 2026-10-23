@@ -790,29 +790,19 @@ static void b2ExecuteBlock( b2SolverStage* stage, b2StepContext* context, b2Solv
 			break;
 
 		case b2_stageSolve:
+		case b2_stageRelax:
 			if ( blockType == b2_graphContactBlock )
 			{
-				b2SolveContactsTask( startIndex, endIndex, context, stage->colorIndex, true );
+				b2SolveContactsTask( startIndex, endIndex, context, stage->colorIndex, stageType == b2_stageSolve );
 			}
 			else if ( blockType == b2_graphJointBlock )
 			{
-				b2SolveJointsTask( startIndex, endIndex, context, stage->colorIndex, true, block );
+				b2SolveJointsTask( startIndex, endIndex, context, stage->colorIndex, stageType == b2_stageSolve, block );
 			}
 			break;
 
 		case b2_stageIntegratePositions:
 			b2IntegratePositionsTask( startIndex, endIndex, context );
-			break;
-
-		case b2_stageRelax:
-			if ( blockType == b2_graphContactBlock )
-			{
-				b2SolveContactsTask( startIndex, endIndex, context, stage->colorIndex, false );
-			}
-			else if ( blockType == b2_graphJointBlock )
-			{
-				b2SolveJointsTask( startIndex, endIndex, context, stage->colorIndex, false, block );
-			}
 			break;
 
 		case b2_stageRestitution:
