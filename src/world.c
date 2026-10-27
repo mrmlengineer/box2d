@@ -195,6 +195,7 @@ b2WorldId b2CreateWorld( const b2WorldDef* def )
 	world->contactHertz = def->contactHertz;
 	world->contactDampingRatio = def->contactDampingRatio;
 	world->relaxIterations = def->relaxIterations >= 1 ? def->relaxIterations : 1;
+	world->biasedIterations = def->biasedIterations >= 1 ? def->biasedIterations : 1;
 
 	if ( def->frictionCallback == NULL )
 	{

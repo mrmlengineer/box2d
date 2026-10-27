@@ -22,12 +22,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-// Compile-time override used by solver audits; production keeps one biased pass.
-#ifndef B2_BIASED_ITERATIONS
-#define B2_BIASED_ITERATIONS 1
-#endif
-// Relax iterations are configurable per world; see b2WorldDef::relaxIterations.
-
 // Compare to SDL_CPUPauseInstruction
 #if ( defined( __GNUC__ ) || defined( __clang__ ) ) && ( defined( __i386__ ) || defined( __x86_64__ ) )
 static inline void b2Pause( void )
@@ -1470,7 +1464,7 @@ void b2Solve( b2World* world, b2StepContext* stepContext )
 			jointBlockCount = maxBlockCount;
 		}
 
-		stepContext->biasedIterations = B2_BIASED_ITERATIONS;
+		stepContext->biasedIterations = world->biasedIterations;
 
 		int stageCount = 0;
 

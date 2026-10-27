@@ -101,6 +101,9 @@ typedef struct b2WorldDef
 	/// injected by speculative contacts at additional solver cost. Must be at least 1.
 	int relaxIterations;
 
+	/// Number of biased solver iterations per substep. Must be at least 1. Default is 1.
+	int biasedIterations;
+
 	/// This parameter controls how fast overlap is resolved and usually has units of meters per second. This only
 	/// puts a cap on the resolution speed. The resolution speed is increased by increasing the hertz and/or
 	/// decreasing the damping ratio.

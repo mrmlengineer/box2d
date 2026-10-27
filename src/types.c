@@ -17,6 +17,7 @@ b2WorldDef b2DefaultWorldDef( void )
 	def.contactHertz = 30.0;
 	def.contactDampingRatio = 10.0f;
 	def.relaxIterations = 2;
+	def.biasedIterations = 1;
 
 	// 400 meters per second, faster than the speed of sound
 	def.maximumLinearSpeed = 400.0f * b2_lengthUnitsPerMeter;
