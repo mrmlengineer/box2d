@@ -22,8 +22,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-// todo testing
-#define ITERATIONS 1
+// Compile-time override used by solver audits; production keeps one biased pass.
+#ifndef B2_BIASED_ITERATIONS
+#define B2_BIASED_ITERATIONS 1
+#endif
 // Relax iterations are configurable per world; see b2WorldDef::relaxIterations.
 
 // Compare to SDL_CPUPauseInstruction
@@ -1047,8 +1049,9 @@ static void b2SolverTask( int startIndex, int endIndex, uint32_t threadIndexIgno
 			// solve constraints
 			bool useBias = true;
 
-			for ( int j = 0; j < ITERATIONS; ++j )
+			for ( int j = 0; j < context->biasedIterations; ++j )
 			{
+				context->biasedIteration = j;
 				b2SolveOverflowJoints( context, useBias );
 				b2SolveOverflowContacts( context, useBias );
 
@@ -1095,7 +1098,7 @@ static void b2SolverTask( int startIndex, int endIndex, uint32_t threadIndexIgno
 
 		// advance the stage according to the sub-stepping tasks just completed
 		// integrate velocities / warm start / solve / integrate positions / relax
-		stageIndex += 1 + activeColorCount + ITERATIONS * activeColorCount + 1 + relaxIterations * activeColorCount;
+		stageIndex += 1 + activeColorCount + context->biasedIterations * activeColorCount + 1 + relaxIterations * activeColorCount;
 
 		// Restitution
 		{
@@ -1467,6 +1470,8 @@ void b2Solve( b2World* world, b2StepContext* stepContext )
 			jointBlockCount = maxBlockCount;
 		}
 
+		stepContext->biasedIterations = B2_BIASED_ITERATIONS;
+
 		int stageCount = 0;
 
 		// b2_stagePrepareJoints
@@ -1478,7 +1483,7 @@ void b2Solve( b2World* world, b2StepContext* stepContext )
 		// b2_stageWarmStart
 		stageCount += activeColorCount;
 		// b2_stageSolve
-		stageCount += ITERATIONS * activeColorCount;
+		stageCount += stepContext->biasedIterations * activeColorCount;
 		// b2_stageIntegratePositions
 		stageCount += 1;
 		// b2_stageRelax
@@ -1663,7 +1668,7 @@ void b2Solve( b2World* world, b2StepContext* stepContext )
 		}
 
 		// Solve graph
-		for (int j = 0; j < ITERATIONS; ++j)
+		for (int j = 0; j < stepContext->biasedIterations; ++j)
 		{
 			for ( int i = 0; i < activeColorCount; ++i )
 			{

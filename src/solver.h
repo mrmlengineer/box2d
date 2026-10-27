@@ -131,6 +131,8 @@ typedef struct b2StepContext
 	b2SolverStage* stages;
 	int stageCount;
 	bool enableWarmStarting;
+	int biasedIterations;
+	int biasedIteration;
 
 	// todo padding to prevent false sharing
 	char dummy1[64];

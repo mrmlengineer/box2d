@@ -364,10 +364,10 @@ void b2SolveRevoluteJoint( b2JointSim* base, b2StepContext* context, bool useBia
 		b2PrepareRevoluteGeometry( base, context, useBias, stateA, stateB );
 	}
 	// Relaxation geometry survives velocity integration and warm starting.
-	// Invalidate for the position integration following a biased solve.
+	// Invalidate only before integration; extra biased passes share these positions.
 	if ( useBias )
 	{
-		joint->relaxGeometryValid = false;
+		joint->relaxGeometryValid = context->biasedIteration + 1 < context->biasedIterations;
 	}
 
 	// Solve spring.
@@ -766,7 +766,8 @@ static void b2PrepareRevoluteGroup( b2RevoluteGroup* g, b2JointSim* joints, int 
 	{
 		b2PrepareRevoluteGroupGeometry( g, joints, count, context );
 	}
-	if ( useBias )
+	// Later biased passes must retain the impulses accumulated in the packed group.
+	if ( useBias && context->biasedIteration == 0 )
 	{
 		for ( int lane = 0; lane < count; ++lane )
 		{
